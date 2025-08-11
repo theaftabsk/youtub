@@ -29,9 +29,9 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0'
 ]
 
-def get_ytdl_opts():
+def get_ytdl_opts(include_pot=False):
     """Generate dynamic yt-dlp options with current timestamp"""
-    return {
+    base_opts = {
         'quiet': True,
         'no_warnings': False,
         'force_ipv4': True,
@@ -47,7 +47,8 @@ def get_ytdl_opts():
             'youtube': {
                 'player_client': ['android', 'web'],
                 'player_skip': ['configs'],
-                'skip': ['hls', 'dash', 'translated_subs']
+                'skip': ['hls', 'dash', 'translated_subs'],
+                'formats': 'missing_pot' if include_pot else None
             }
         },
         'retries': 3,
@@ -56,6 +57,12 @@ def get_ytdl_opts():
             'fragment': lambda n: min(2 ** n, 10),
         }
     }
+    
+    # Add PO Token if available (read from environment variable)
+    if os.environ.get('YT_PO_TOKEN'):
+        base_opts['extractor_args']['youtube']['po_token'] = os.environ.get('YT_PO_TOKEN')
+    
+    return base_opts
 
 @app.route('/info', methods=['GET'])
 def get_video_info():
@@ -69,7 +76,8 @@ def get_video_info():
     logger.info(f"Processing info request for: {clean_url}")
 
     try:
-        ydl_opts = get_ytdl_opts()
+        # First try without forcing missing POT formats
+        ydl_opts = get_ytdl_opts(include_pot=False)
         ydl_opts.update({'extract_flat': 'in_playlist'})
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -83,6 +91,17 @@ def get_video_info():
                 logger.warning(f"Playlist detected: {clean_url}")
                 return jsonify({'error': 'Playlists are not supported'}), 400
 
+            # Check if we got usable formats
+            usable_formats = [f for f in info.get('formats', []) if f.get('url')]
+            
+            # If no usable formats, try with POT workaround
+            if not usable_formats:
+                logger.warning("No usable formats found, retrying with POT workaround")
+                ydl_opts = get_ytdl_opts(include_pot=True)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl_retry:
+                    info = ydl_retry.extract_info(clean_url, download=False)
+                    usable_formats = [f for f in info.get('formats', []) if f.get('url')]
+
             response_data = {
                 'status': 'success',
                 'video_id': info.get('id'),
@@ -92,17 +111,34 @@ def get_video_info():
                 'uploader': info.get('uploader'),
                 'view_count': info.get('view_count'),
                 'availability': info.get('availability'),
-                'formats': []
+                'formats': [],
+                'warnings': []
             }
 
-            for fmt in info.get('formats', []):
-                if fmt.get('url'):
-                    response_data['formats'].append({
-                        'format_id': fmt.get('format_id'),
-                        'ext': fmt.get('ext'),
-                        'resolution': fmt.get('resolution'),
-                        'filesize': fmt.get('filesize')
-                    })
+            for fmt in usable_formats:
+                response_data['formats'].append({
+                    'format_id': fmt.get('format_id'),
+                    'ext': fmt.get('ext'),
+                    'resolution': fmt.get('resolution'),
+                    'filesize': fmt.get('filesize'),
+                    'protocol': fmt.get('protocol'),
+                    'vcodec': fmt.get('vcodec'),
+                    'acodec': fmt.get('acodec')
+                })
+
+            # Add warnings if we had to use workarounds
+            if len(usable_formats) < len(info.get('formats', [])):
+                response_data['warnings'].append(
+                    'Some formats unavailable due to YouTube restrictions'
+                )
+                if os.environ.get('YT_PO_TOKEN'):
+                    response_data['warnings'].append(
+                        'Consider updating your PO Token for more formats'
+                    )
+                else:
+                    response_data['warnings'].append(
+                        'Consider providing a PO Token for more formats'
+                    )
 
             logger.info(f"Successfully retrieved info for: {clean_url}")
             return jsonify(response_data)
