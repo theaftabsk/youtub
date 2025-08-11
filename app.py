@@ -16,9 +16,19 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# New root endpoint
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({
+        'message': 'Welcome to MyDownloader API!',
+        'endpoints': {
+            '/info': 'GET - Fetch video metadata (pass ?url=<video_url>)',
+            '/download': 'POST - Download video/audio (JSON: {"url": "<video_url>", "format": "best", "audio_only": false})'
+        }
+    }), 200
+
 @app.route('/download', methods=['POST'])
 def download_video():
-    # Validate input
     if not request.is_json:
         return jsonify({'error': 'Request must be JSON'}), 400
         
@@ -26,11 +36,9 @@ def download_video():
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
     
-    # Get optional parameters
     format_type = request.json.get('format', 'best')
     audio_only = request.json.get('audio_only', False)
     
-    # Configure download options
     ydl_opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, f'{str(uuid.uuid4())}_%(title)s.%(ext)s'),
         'quiet': True,
@@ -38,7 +46,6 @@ def download_video():
         'restrictfilenames': True,
     }
     
-    # Set format based on user preference
     if audio_only:
         ydl_opts.update({
             'format': 'bestaudio/best',
@@ -56,11 +63,9 @@ def download_video():
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
-            # Handle post-processing for audio downloads
             if audio_only and 'entries' not in info:
                 filename = os.path.splitext(filename)[0] + '.mp3'
             
-            # Secure the filename before returning it
             safe_filename = secure_filename(os.path.basename(filename))
             
         return jsonify({
@@ -88,7 +93,6 @@ def get_video_info():
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            # Simplify the info for response
             response_info = {
                 'title': info.get('title'),
                 'duration': info.get('duration'),
@@ -99,7 +103,6 @@ def get_video_info():
                 'webpage_url': info.get('webpage_url')
             }
             
-            # Add available formats
             if 'formats' in info:
                 for fmt in info['formats']:
                     if fmt.get('ext') and fmt.get('url'):
