@@ -1,0 +1,5 @@
+flask==2.3.2
+yt-dlp==2023.10.13
+gunicorn==20.1.0
+flask-cors==4.0.1
+werkzeug==2.3.7
